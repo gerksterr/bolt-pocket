@@ -64,3 +64,6 @@ export const IconRefresh = (p) => (
 export const IconGithub = (p) => (
   <svg {...base} {...p}><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5a5.3 5.3 0 0 0-1.5-3.5A5 5 0 0 0 18 2s-1.2-.3-4 1.5a13.4 13.4 0 0 0-4 0C7.2 1.7 6 2 6 2a5 5 0 0 0-.5 3.5A5.3 5.3 0 0 0 4 9c0 3.5 3 5.5 6 5.5A4.8 4.8 0 0 0 9 18v4" /></svg>
 )
+export const IconList = (p) => (
+  <svg {...base} {...p}><path d="M8 6h13M8 12h13M8 18h13" /><path d="M3 6h.01M3 12h.01M3 18h.01" /></svg>
+)

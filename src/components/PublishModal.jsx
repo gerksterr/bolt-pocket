@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { openBlobPreview } from '../lib/preview'
 import { downloadZip } from '../lib/zip'
 import { deployToGitHubPages } from '../lib/github'
+import { logError, logInfo, logOk } from '../lib/log'
 import { IconClose, IconDownload, IconExternal, IconGithub, IconRocket } from './icons.jsx'
 
 const inputCls =
@@ -17,7 +18,11 @@ export default function PublishModal({ open, project, settings, onClose }) {
 
   if (!open) return null
 
-  const log = (msg) => setLogLines((l) => [...l, msg])
+  const log = (msg) => {
+    setLogLines((l) => [...l, msg])
+    if (msg.startsWith('Error')) logError('deploy', msg)
+    else logInfo('deploy', msg)
+  }
 
   const deploy = async () => {
     setDeploying(true)
@@ -33,6 +38,7 @@ export default function PublishModal({ open, project, settings, onClose }) {
       })
       setSiteUrl(url)
       log('Done! Site is building — it can take 1–2 minutes to go live.')
+      logOk('deploy', `live at ${url}`)
     } catch (e) {
       log(`Error: ${e.message}`)
     } finally {

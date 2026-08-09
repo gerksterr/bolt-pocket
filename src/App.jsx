@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import ChatPanel from './components/ChatPanel.jsx'
 import PreviewPane from './components/PreviewPane.jsx'
 import CodePane from './components/CodePane.jsx'
+import LogPane from './components/LogPane.jsx'
 import ProjectsDrawer from './components/ProjectsDrawer.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 import PublishModal from './components/PublishModal.jsx'
 import { generateSite } from './lib/ai'
+import { logInfo } from './lib/log'
 import {
   createProject,
   loadProjects,
@@ -19,6 +21,7 @@ import {
   IconCode,
   IconEye,
   IconGear,
+  IconList,
   IconMenu,
   IconRocket,
   IconStop,
@@ -52,7 +55,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [progress, setProgress] = useState(null) // {chars, startedAt} while generating
   const abortRef = useRef(null)
+  const progressThrottleRef = useRef(0)
   const isDesktop = useMediaQuery('(min-width: 768px)')
 
   useEffect(() => saveProjects(projects), [projects])
@@ -86,6 +91,8 @@ export default function App() {
       return
     }
 
+    logInfo('prompt', `"${text.length > 80 ? text.slice(0, 80) + '…' : text}"`)
+
     // snapshot current files so Revert can restore the state before this prompt
     updateProject(proj.id, (p) => ({
       history: [...p.history, { ...p.files }].slice(-HISTORY_LIMIT),
@@ -95,6 +102,7 @@ export default function App() {
     const controller = new AbortController()
     abortRef.current = controller
     setGenerating(true)
+    setProgress({ chars: 0, startedAt: Date.now() })
     try {
       const files = await generateSite({
         apiKey: settings.apiKey,
@@ -102,6 +110,13 @@ export default function App() {
         prompt: text,
         currentFiles: proj.files,
         signal: controller.signal,
+        onProgress: (chars) => {
+          const now = Date.now()
+          if (now - progressThrottleRef.current > 120) {
+            progressThrottleRef.current = now
+            setProgress((p) => (p ? { ...p, chars } : p))
+          }
+        },
       })
       updateProject(proj.id, (p) => ({
         files,
@@ -116,13 +131,20 @@ export default function App() {
       const msg =
         e.name === 'AbortError'
           ? { role: 'system', text: 'Generation halted.', ts: Date.now() }
-          : { role: 'error', text: e.message, ts: Date.now() }
+          : {
+              role: 'error',
+              text: e.message,
+              hint: e.hint || 'Technical details are in the Log tab.',
+              retry: text,
+              ts: Date.now(),
+            }
       updateProject(proj.id, (p) => ({
         history: p.history.slice(0, -1),
         chat: [...p.chat, msg].slice(-CHAT_LIMIT),
       }))
     } finally {
       setGenerating(false)
+      setProgress(null)
       abortRef.current = null
     }
   }
@@ -223,14 +245,21 @@ export default function App() {
             view === 'chat' ? 'flex' : 'hidden'
           } min-h-0 flex-1 flex-col md:flex md:w-[380px] md:flex-none md:border-r md:border-zinc-800`}
         >
-          <ChatPanel chat={active.chat} generating={generating} onSend={sendPrompt} onHalt={halt} />
+          <ChatPanel
+            chat={active.chat}
+            generating={generating}
+            progress={progress}
+            onSend={sendPrompt}
+            onHalt={halt}
+            onRetry={sendPrompt}
+          />
         </section>
 
         <section
           className={`${view !== 'chat' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col md:flex`}
         >
           <div className="hidden border-b border-zinc-800 bg-zinc-900 md:flex">
-            {['preview', 'code'].map((tab) => (
+            {['preview', 'code', 'log'].map((tab) => (
               <button
                 key={tab}
                 onClick={() => setRightTab(tab)}
@@ -251,6 +280,9 @@ export default function App() {
           <div className={rightView === 'code' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
             <CodePane files={active.files} onChange={(files) => updateProject(active.id, { files })} />
           </div>
+          <div className={rightView === 'log' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+            <LogPane />
+          </div>
         </section>
       </main>
 
@@ -262,6 +294,7 @@ export default function App() {
           { key: 'chat', label: 'Chat', Icon: IconChat },
           { key: 'preview', label: 'Preview', Icon: IconEye },
           { key: 'code', label: 'Code', Icon: IconCode },
+          { key: 'log', label: 'Log', Icon: IconList },
         ].map(({ key, label, Icon }) => (
           <button
             key={key}

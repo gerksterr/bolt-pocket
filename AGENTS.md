@@ -7,7 +7,8 @@ Pocket AI website builder. React 18 + Vite 5 + Tailwind 3, fully client-side, no
 
 ## Architecture
 - `src/lib/store.js` — localStorage (`boltpocket.projects.v1`, `boltpocket.settings.v1`). Project shape: `{id, name, files: {index.html, style.css, script.js}, history: [], chat: []}`. History holds pre-generation snapshots (cap 30); chat capped at 100.
-- `src/lib/ai.js` — OpenRouter `POST /api/v1/chat/completions`. System prompt must stay exactly: `Return ONLY JSON {"files": {"index.html": "...", "style.css": "...", "script.js": "..."}}`. Handles fenced-JSON extraction.
+- `src/lib/ai.js` — OpenRouter `POST /api/v1/chat/completions` with `stream: true` (SSE parsed in `readStream`, tolerant of chunk-split lines). System prompt must stay exactly: `Return ONLY JSON {"files": {"index.html": "...", "style.css": "...", "script.js": "..."}}`. Errors surface as `GenerationError(message, hint, phase)`; 180s timeout via internal AbortController (user halt = external signal). `testConnection()` = 1-token probe used by Settings.
+- `src/lib/log.js` — ring-buffer activity log (localStorage `boltpocket.log.v1`, 200 entries) with pub/sub; viewed in the Log tab (`LogPane.jsx`). Log phases: prompt/request/connected/stream/parse/done, test, deploy.
 - `src/lib/preview.js` — builds iframe srcDoc by inlining style.css/script.js into index.html (strips sibling link/script tags).
 - `src/lib/github.js` — PAT-based deploy: ensure repo (auto-creates for PAT owner), PUT contents per file (sha-aware), POST /pages.
 - `src/App.jsx` — all state; `useMediaQuery('(min-width: 768px)')` switches mobile tabs vs desktop split.

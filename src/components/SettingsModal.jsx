@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { MODEL_PRESETS } from '../lib/ai'
+import { MODEL_PRESETS, testConnection } from '../lib/ai'
 import { IconClose, IconGear } from './icons.jsx'
 
 function Field({ label, hint, children }) {
@@ -17,10 +17,23 @@ const inputCls =
 
 export default function SettingsModal({ open, settings, onSave, onClose }) {
   const [draft, setDraft] = useState(settings)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState(null)
 
   if (!open) return null
 
-  const set = (key) => (e) => setDraft((d) => ({ ...d, [key]: e.target.value }))
+  const set = (key) => (e) => {
+    setTestResult(null)
+    setDraft((d) => ({ ...d, [key]: e.target.value }))
+  }
+
+  const runTest = async () => {
+    setTesting(true)
+    setTestResult(null)
+    const result = await testConnection({ apiKey: draft.apiKey.trim(), model: draft.model.trim() })
+    setTestResult(result)
+    setTesting(false)
+  }
 
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center sm:items-center">
@@ -72,7 +85,10 @@ export default function SettingsModal({ open, settings, onSave, onClose }) {
               <button
                 key={m.value}
                 type="button"
-                onClick={() => setDraft((d) => ({ ...d, model: m.value }))}
+                onClick={() => {
+                  setTestResult(null)
+                  setDraft((d) => ({ ...d, model: m.value }))
+                }}
                 className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
                   draft.model === m.value
                     ? 'border-amber-500 bg-amber-500/10 text-amber-300'
@@ -82,6 +98,31 @@ export default function SettingsModal({ open, settings, onSave, onClose }) {
                 {m.label}
               </button>
             ))}
+          </div>
+
+          <div className="rounded-xl border border-zinc-800 p-3">
+            <button
+              type="button"
+              onClick={runTest}
+              disabled={testing || !draft.apiKey.trim() || !draft.model.trim()}
+              className="w-full rounded-xl border border-zinc-700 px-4 py-2.5 text-sm font-medium text-zinc-100 hover:border-amber-500 disabled:opacity-40"
+            >
+              {testing ? 'Testing connection…' : 'Test connection'}
+            </button>
+            {testResult && (
+              <div className="mt-2 text-xs">
+                <p className={testResult.ok ? 'text-emerald-400' : 'text-red-400'}>
+                  {testResult.ok ? '✓ ' : '✕ '}
+                  {testResult.message} · {testResult.latency}
+                </p>
+                {!testResult.ok && testResult.hint && (
+                  <p className="mt-1 text-zinc-500">{testResult.hint}</p>
+                )}
+              </div>
+            )}
+            <p className="mt-2 text-[11px] text-zinc-600">
+              Sends a 1-token “ping” to the selected model — validates network, key, and model id.
+            </p>
           </div>
 
           <div className="border-t border-zinc-800 pt-4">

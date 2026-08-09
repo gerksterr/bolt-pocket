@@ -1,7 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
-import { IconSend, IconStop } from './icons.jsx'
+import { IconRefresh, IconSend, IconStop } from './icons.jsx'
 
-export default function ChatPanel({ chat, generating, onSend, onHalt }) {
+function ProgressBubble({ progress }) {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 500)
+    return () => clearInterval(t)
+  }, [])
+  const secs = progress ? Math.max(0, Math.floor((Date.now() - progress.startedAt) / 1000)) : 0
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-zinc-800 px-3.5 py-2 text-sm text-zinc-300">
+        <span className="inline-flex items-center gap-2">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+          Generating… {(progress?.chars || 0).toLocaleString()} chars · {secs}s
+        </span>
+        <p className="mt-1 text-[11px] text-zinc-500">Follow along in the Log tab</p>
+      </div>
+    </div>
+  )
+}
+
+export default function ChatPanel({ chat, generating, progress, onSend, onHalt, onRetry }) {
   const [text, setText] = useState('')
   const scrollRef = useRef(null)
 
@@ -41,20 +61,20 @@ export default function ChatPanel({ chat, generating, onSend, onHalt }) {
               }
             >
               <p className="whitespace-pre-wrap break-words">{m.text}</p>
+              {m.hint && <p className="mt-1 text-xs text-red-300/80">{m.hint}</p>}
+              {m.role === 'error' && m.retry && onRetry && (
+                <button
+                  onClick={() => onRetry(m.retry)}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-red-900 px-2.5 py-1.5 text-xs font-medium text-red-100 active:bg-red-800"
+                >
+                  <IconRefresh width={12} height={12} /> Retry prompt
+                </button>
+              )}
               {m.meta && <p className="mt-1 text-[11px] opacity-60">{m.meta}</p>}
             </div>
           </div>
         ))}
-        {generating && (
-          <div className="flex justify-start">
-            <div className="rounded-2xl rounded-bl-sm bg-zinc-800 px-3.5 py-2 text-sm text-zinc-300">
-              <span className="inline-flex items-center gap-2">
-                <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
-                Generating…
-              </span>
-            </div>
-          </div>
-        )}
+        {generating && <ProgressBubble progress={progress} />}
       </div>
 
       <div className="border-t border-zinc-800 bg-zinc-900 p-2">
