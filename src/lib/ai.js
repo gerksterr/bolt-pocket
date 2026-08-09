@@ -1,7 +1,10 @@
 import { logError, logInfo, logOk } from './log'
 
 const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions'
-const TIMEOUT_MS = 180_000
+// Abort only when NO bytes arrive for this long (OpenRouter keep-alives count
+// as activity), or when the user-configured total limit is exceeded.
+const IDLE_MS = 120_000
+const DEFAULT_TIMEOUT_MS = 600_000
 
 export const SYSTEM_PROMPT =
   'Return ONLY JSON {"files": {"index.html": "...", "style.css": "...", "script.js": "..."}}'
@@ -82,8 +85,9 @@ function buildUserMessage(prompt, currentFiles) {
 }
 
 // Read an SSE stream, returning the accumulated content. onChunk(len, isFirst)
-// fires for every content delta.
-async function readStream(body, onChunk) {
+// fires for every content delta; onActivity fires for every received chunk
+// (including keep-alives) so callers can run a stall watchdog.
+async function readStream(body, onChunk, onActivity) {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -93,6 +97,7 @@ async function readStream(body, onChunk) {
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
+    onActivity?.()
     buffer += decoder.decode(value, { stream: true })
     let idx
     while ((idx = buffer.indexOf('\n')) !== -1) {
@@ -116,21 +121,42 @@ async function readStream(body, onChunk) {
   return text
 }
 
-export async function generateSite({ apiKey, model, prompt, currentFiles, signal, onProgress }) {
+export async function generateSite({
+  apiKey,
+  model,
+  prompt,
+  currentFiles,
+  signal,
+  onProgress,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  idleMs = IDLE_MS,
+}) {
   const startedAt = Date.now()
   const elapsed = () => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`
 
-  // own controller so a timeout can abort independently of the user's halt signal
-  let timedOut = false
+  // own controller so limits can abort independently of the user's halt signal
+  let abortReason = null // 'halt' | 'timeout' | 'idle'
   const controller = new AbortController()
-  const onExternalAbort = () => controller.abort()
-  signal?.addEventListener('abort', onExternalAbort)
-  const timer = setTimeout(() => {
-    timedOut = true
+  const onExternalAbort = () => {
+    abortReason = 'halt'
     controller.abort()
-  }, TIMEOUT_MS)
+  }
+  signal?.addEventListener('abort', onExternalAbort)
+  const totalTimer = setTimeout(() => {
+    abortReason = 'timeout'
+    controller.abort()
+  }, timeoutMs)
+  let idleTimer = null
+  const resetIdle = () => {
+    clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      abortReason = 'idle'
+      controller.abort()
+    }, idleMs)
+  }
+  resetIdle() // also covers a connect that never delivers bytes
 
-  logInfo('request', `model=${model} · prompt ${prompt.length} chars · timeout ${TIMEOUT_MS / 1000}s`)
+  logInfo('request', `model=${model} · prompt ${prompt.length} chars · limit ${Math.round(timeoutMs / 1000)}s`)
   try {
     let res
     try {
@@ -172,14 +198,18 @@ export async function generateSite({ apiKey, model, prompt, currentFiles, signal
     logOk('connected', `HTTP 200 at ${elapsed()} · streaming response…`)
 
     let lastLogged = 0
-    const text = await readStream(res.body, (len, isFirst) => {
-      if (isFirst) logOk('stream', `first token at ${elapsed()}`)
-      if (len - lastLogged >= 2000) {
-        lastLogged = len
-        logInfo('stream', `${len.toLocaleString()} chars received at ${elapsed()}`)
-      }
-      onProgress?.(len)
-    })
+    const text = await readStream(
+      res.body,
+      (len, isFirst) => {
+        if (isFirst) logOk('stream', `first token at ${elapsed()}`)
+        if (len - lastLogged >= 2000) {
+          lastLogged = len
+          logInfo('stream', `${len.toLocaleString()} chars received at ${elapsed()}`)
+        }
+        onProgress?.(len)
+      },
+      resetIdle,
+    )
 
     if (!text.trim()) {
       logError('parse', `stream ended with no content at ${elapsed()}`)
@@ -209,17 +239,26 @@ export async function generateSite({ apiKey, model, prompt, currentFiles, signal
     logOk('done', `files updated in ${elapsed()} · ${sizes}`)
     return files
   } catch (e) {
-    if (e.name === 'AbortError' && timedOut) {
-      logError('timeout', `no completed response within ${TIMEOUT_MS / 1000}s`)
+    if (e.name === 'AbortError' && abortReason === 'timeout') {
+      logError('timeout', `hit the ${Math.round(timeoutMs / 1000)}s total limit at ${elapsed()}`)
       throw new GenerationError(
-        `Generation timed out after ${TIMEOUT_MS / 1000} seconds.`,
-        'The model may be overloaded — retry, or pick a faster model (e.g. Gemini 2.0 Flash).',
+        `Generation hit the ${Math.round(timeoutMs / 1000)}s time limit (Settings → Generation timeout).`,
+        'Raise the limit in Settings, or use a faster model (e.g. Gemini 2.0 Flash).',
         'timeout',
+      )
+    }
+    if (e.name === 'AbortError' && abortReason === 'idle') {
+      logError('timeout', `no data received for ${Math.round(idleMs / 1000)}s at ${elapsed()}`)
+      throw new GenerationError(
+        `The model stopped responding — no data for ${Math.round(idleMs / 1000)}s.`,
+        'The provider may be overloaded. Retry, or switch models in Settings.',
+        'idle',
       )
     }
     throw e
   } finally {
-    clearTimeout(timer)
+    clearTimeout(totalTimer)
+    clearTimeout(idleTimer)
     signal?.removeEventListener('abort', onExternalAbort)
   }
 }

@@ -10,8 +10,10 @@ import { generateSite } from './lib/ai'
 import { logInfo } from './lib/log'
 import {
   createProject,
+  loadActiveId,
   loadProjects,
   loadSettings,
+  saveActiveId,
   saveProjects,
   saveSettings,
 } from './lib/store'
@@ -47,7 +49,7 @@ export default function App() {
     const loaded = loadProjects()
     return loaded.length ? loaded : [createProject('My first site')]
   })
-  const [activeId, setActiveId] = useState(null)
+  const [activeId, setActiveId] = useState(loadActiveId)
   const [settings, setSettings] = useState(loadSettings)
   const [view, setView] = useState('chat') // mobile bottom-nav tab
   const [rightTab, setRightTab] = useState('preview') // desktop right pane tab
@@ -64,6 +66,8 @@ export default function App() {
   useEffect(() => saveSettings(settings), [settings])
 
   const active = projects.find((p) => p.id === activeId) || projects[0]
+  const activeProjectId = active?.id
+  useEffect(() => saveActiveId(activeProjectId), [activeProjectId])
 
   const updateProject = (id, patch) => {
     setProjects((ps) =>
@@ -110,6 +114,7 @@ export default function App() {
         prompt: text,
         currentFiles: proj.files,
         signal: controller.signal,
+        timeoutMs: (Number(settings.timeoutSecs) || 600) * 1000,
         onProgress: (chars) => {
           const now = Date.now()
           if (now - progressThrottleRef.current > 120) {
@@ -275,7 +280,7 @@ export default function App() {
           </div>
 
           <div className={rightView === 'preview' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
-            <PreviewPane files={active.files} />
+            <PreviewPane projectId={active.id} files={active.files} />
           </div>
           <div className={rightView === 'code' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
             <CodePane files={active.files} onChange={(files) => updateProject(active.id, { files })} />

@@ -1,5 +1,6 @@
 const PROJECTS_KEY = 'boltpocket.projects.v1'
 const SETTINGS_KEY = 'boltpocket.settings.v1'
+const ACTIVE_KEY = 'boltpocket.active.v1'
 
 export const FILE_NAMES = ['index.html', 'style.css', 'script.js']
 
@@ -35,6 +36,7 @@ export const DEFAULT_SETTINGS = {
   model: 'deepseek/deepseek-chat',
   ghPat: '',
   ghUser: '',
+  timeoutSecs: 600,
 }
 
 export function uid() {
@@ -84,4 +86,21 @@ export function loadSettings() {
 
 export function saveSettings(settings) {
   write(SETTINGS_KEY, settings)
+}
+
+export function loadActiveId() {
+  try {
+    return localStorage.getItem(ACTIVE_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function saveActiveId(id) {
+  try {
+    if (id) localStorage.setItem(ACTIVE_KEY, id)
+    else localStorage.removeItem(ACTIVE_KEY)
+  } catch {
+    /* ignore */
+  }
 }

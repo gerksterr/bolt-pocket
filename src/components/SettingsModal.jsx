@@ -125,6 +125,37 @@ export default function SettingsModal({ open, settings, onSave, onClose }) {
             </p>
           </div>
 
+          <Field
+            label="Generation timeout (seconds)"
+            hint="Total limit per generation. Separately, a generation is aborted if no data arrives for 2 minutes."
+          >
+            <input
+              type="number"
+              min="60"
+              max="1800"
+              step="30"
+              value={draft.timeoutSecs}
+              onChange={(e) => setDraft((d) => ({ ...d, timeoutSecs: e.target.value }))}
+              className={inputCls}
+            />
+          </Field>
+          <div className="flex flex-wrap gap-2">
+            {[180, 300, 600, 900, 1200].map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setDraft((d) => ({ ...d, timeoutSecs: s }))}
+                className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                  Number(draft.timeoutSecs) === s
+                    ? 'border-amber-500 bg-amber-500/10 text-amber-300'
+                    : 'border-zinc-700 text-zinc-400 hover:border-zinc-500'
+                }`}
+              >
+                {s / 60} min
+              </button>
+            ))}
+          </div>
+
           <div className="border-t border-zinc-800 pt-4">
             <p className="mb-3 text-sm font-medium text-zinc-300">GitHub deploy (optional)</p>
             <div className="space-y-4">
