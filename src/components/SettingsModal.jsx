@@ -1,6 +1,18 @@
 import { useState } from 'react'
-import { MODEL_PRESETS, testConnection } from '../lib/ai'
+import { BASE_URL_PRESETS, MODEL_PRESETS, MOONSHOT_MODEL_PRESETS, testConnection } from '../lib/ai'
 import { IconClose, IconGear } from './icons.jsx'
+
+const KEY_LINKS = [
+  { match: 'openrouter.ai', url: 'https://openrouter.ai/keys', label: 'openrouter.ai/keys' },
+  { match: 'moonshot.cn', url: 'https://platform.moonshot.cn/console/api-keys', label: 'platform.moonshot.cn' },
+  { match: 'moonshot.ai', url: 'https://platform.moonshot.ai/console/api-keys', label: 'platform.moonshot.ai' },
+  { match: 'openai.com', url: 'https://platform.openai.com/api-keys', label: 'platform.openai.com/api-keys' },
+]
+
+function keyLinkFor(baseUrl) {
+  const found = KEY_LINKS.find((k) => (baseUrl || '').includes(k.match))
+  return found || { url: 'https://openrouter.ai/keys', label: 'your provider’s API keys page' }
+}
 
 function Field({ label, hint, children }) {
   return (
@@ -30,10 +42,18 @@ export default function SettingsModal({ open, settings, onSave, onClose }) {
   const runTest = async () => {
     setTesting(true)
     setTestResult(null)
-    const result = await testConnection({ apiKey: draft.apiKey.trim(), model: draft.model.trim() })
+    const result = await testConnection({
+      apiKey: draft.apiKey.trim(),
+      baseUrl: draft.baseUrl.trim(),
+      model: draft.model.trim(),
+    })
     setTestResult(result)
     setTesting(false)
   }
+
+  const isMoonshot = (draft.baseUrl || '').includes('moonshot')
+  const modelPresets = isMoonshot ? MOONSHOT_MODEL_PRESETS : MODEL_PRESETS
+  const keyLink = keyLinkFor(draft.baseUrl)
 
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center sm:items-center">
@@ -50,20 +70,64 @@ export default function SettingsModal({ open, settings, onSave, onClose }) {
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
           <Field
-            label="OpenRouter API key"
-            hint={<>Get one at <a className="text-amber-400 underline" href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">openrouter.ai/keys</a>. Stored only in this browser.</>}
+            label="API base URL"
+            hint="Any OpenAI-compatible endpoint — /chat/completions is appended automatically."
+          >
+            <input
+              type="url"
+              value={draft.baseUrl}
+              onChange={set('baseUrl')}
+              placeholder="https://openrouter.ai/api/v1"
+              list="base-urls"
+              autoComplete="off"
+              className={inputCls}
+            />
+            <datalist id="base-urls">
+              {BASE_URL_PRESETS.map((b) => (
+                <option key={b.value} value={b.value}>{b.label}</option>
+              ))}
+            </datalist>
+          </Field>
+          <div className="flex flex-wrap gap-2">
+            {BASE_URL_PRESETS.map((b) => (
+              <button
+                key={b.value}
+                type="button"
+                onClick={() => {
+                  setTestResult(null)
+                  setDraft((d) => ({
+                    ...d,
+                    baseUrl: b.value,
+                    // one tap = ready: swap model only when it doesn't fit the provider
+                    model: d.baseUrl === b.value ? d.model : b.defaultModel,
+                  }))
+                }}
+                className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                  draft.baseUrl === b.value
+                    ? 'border-amber-500 bg-amber-500/10 text-amber-300'
+                    : 'border-zinc-700 text-zinc-400 hover:border-zinc-500'
+                }`}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+
+          <Field
+            label="API key"
+            hint={<>Get one at <a className="text-amber-400 underline" href={keyLink.url} target="_blank" rel="noreferrer">{keyLink.label}</a>. Stored only in this browser.</>}
           >
             <input
               type="password"
               value={draft.apiKey}
               onChange={set('apiKey')}
-              placeholder="sk-or-…"
+              placeholder="sk-…"
               autoComplete="off"
               className={inputCls}
             />
           </Field>
 
-          <Field label="Model" hint="Pick a preset below, or type any OpenRouter model id.">
+          <Field label="Model" hint="Pick a preset below, or type any model id your provider serves.">
             <input
               type="text"
               value={draft.model}
@@ -74,14 +138,14 @@ export default function SettingsModal({ open, settings, onSave, onClose }) {
               className={inputCls}
             />
             <datalist id="model-presets">
-              {MODEL_PRESETS.map((m) => (
+              {[...MODEL_PRESETS, ...MOONSHOT_MODEL_PRESETS].map((m) => (
                 <option key={m.value} value={m.value}>{m.label}</option>
               ))}
             </datalist>
           </Field>
 
           <div className="flex flex-wrap gap-2">
-            {MODEL_PRESETS.map((m) => (
+            {modelPresets.map((m) => (
               <button
                 key={m.value}
                 type="button"

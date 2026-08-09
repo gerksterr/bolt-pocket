@@ -110,6 +110,7 @@ export default function App() {
     try {
       const files = await generateSite({
         apiKey: settings.apiKey,
+        baseUrl: settings.baseUrl,
         model: settings.model,
         prompt: text,
         currentFiles: proj.files,

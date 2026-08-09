@@ -33,6 +33,7 @@ export const DEFAULT_FILES = {
 
 export const DEFAULT_SETTINGS = {
   apiKey: '',
+  baseUrl: 'https://openrouter.ai/api/v1',
   model: 'deepseek/deepseek-chat',
   ghPat: '',
   ghUser: '',

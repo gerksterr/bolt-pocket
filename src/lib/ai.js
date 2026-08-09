@@ -1,10 +1,17 @@
 import { logError, logInfo, logOk } from './log'
 
-const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions'
+const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1'
 // Abort only when NO bytes arrive for this long (OpenRouter keep-alives count
 // as activity), or when the user-configured total limit is exceeded.
 const IDLE_MS = 120_000
 const DEFAULT_TIMEOUT_MS = 600_000
+
+export const BASE_URL_PRESETS = [
+  { label: 'OpenRouter', value: 'https://openrouter.ai/api/v1', defaultModel: 'deepseek/deepseek-chat' },
+  { label: 'Moonshot AI · Kimi direct', value: 'https://api.moonshot.ai/v1', defaultModel: 'kimi-k2-0905-preview' },
+  { label: 'Moonshot CN · Kimi direct', value: 'https://api.moonshot.cn/v1', defaultModel: 'kimi-k2-0905-preview' },
+  { label: 'OpenAI', value: 'https://api.openai.com/v1', defaultModel: 'gpt-4o-mini' },
+]
 
 export const SYSTEM_PROMPT =
   'Return ONLY JSON {"files": {"index.html": "...", "style.css": "...", "script.js": "..."}}'
@@ -16,6 +23,38 @@ export const MODEL_PRESETS = [
   { label: 'GPT-4o mini', value: 'openai/gpt-4o-mini' },
   { label: 'Gemini 2.0 Flash', value: 'google/gemini-2.0-flash-001' },
 ]
+
+export const MOONSHOT_MODEL_PRESETS = [
+  { label: 'Kimi K2', value: 'kimi-k2-0905-preview' },
+  { label: 'Kimi K2 Turbo', value: 'kimi-k2-turbo-preview' },
+  { label: 'kimi-latest', value: 'kimi-latest' },
+]
+
+// Any OpenAI-protocol-compatible base URL works; we append /chat/completions.
+export function chatEndpoint(baseUrl) {
+  return `${(baseUrl || DEFAULT_BASE_URL).trim().replace(/\/+$/, '')}/chat/completions`
+}
+
+function endpointHost(baseUrl) {
+  try {
+    return new URL(chatEndpoint(baseUrl)).host
+  } catch {
+    return baseUrl || DEFAULT_BASE_URL
+  }
+}
+
+function buildHeaders(baseUrl, apiKey) {
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${apiKey}`,
+  }
+  // OpenRouter attribution headers only make sense (and only get sent) there
+  if (endpointHost(baseUrl).includes('openrouter.ai')) {
+    headers['HTTP-Referer'] = window.location.href
+    headers['X-Title'] = 'bolt-pocket'
+  }
+  return headers
+}
 
 // Error with a user-actionable hint and the phase where it occurred.
 export class GenerationError extends Error {
@@ -31,19 +70,19 @@ function httpError(status, body) {
   const detail = body?.error?.message || ''
   switch (true) {
     case status === 401:
-      return ['Invalid OpenRouter API key.', 'Check the key in Settings — it may be revoked or mistyped.']
+      return ['Invalid API key.', 'Check the key in Settings — it may be revoked, mistyped, or for the wrong provider.']
     case status === 402:
-      return ['Insufficient OpenRouter credits.', 'Top up at openrouter.ai/credits, or pick a cheaper model.']
+      return ['Insufficient credits / quota.', 'Top up your provider balance, or pick a cheaper model.']
     case status === 403:
-      return ['Access denied by OpenRouter.', detail || 'Your key may not have access to this model.']
+      return ['Access denied by the provider.', detail || 'Your key may not have access to this model.']
     case status === 404:
-      return ['Model not found.', 'The model id in Settings must exactly match an OpenRouter model.']
+      return ['Model not found.', 'The model id must exactly match one your provider serves.']
     case status === 429:
       return ['Rate limited.', 'Wait a moment and retry, or switch to a less busy model.']
     case status >= 500:
-      return ['OpenRouter or the model provider is having issues.', 'Retry in a moment, or switch models.']
+      return ['The provider is having issues.', 'Retry in a moment, or switch models.']
     default:
-      return [`OpenRouter returned HTTP ${status}.`, detail || null]
+      return [`The provider returned HTTP ${status}.`, detail || null]
   }
 }
 
@@ -123,6 +162,7 @@ async function readStream(body, onChunk, onActivity) {
 
 export async function generateSite({
   apiKey,
+  baseUrl,
   model,
   prompt,
   currentFiles,
@@ -133,6 +173,7 @@ export async function generateSite({
 }) {
   const startedAt = Date.now()
   const elapsed = () => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`
+  const host = endpointHost(baseUrl)
 
   // own controller so limits can abort independently of the user's halt signal
   let abortReason = null // 'halt' | 'timeout' | 'idle'
@@ -156,19 +197,14 @@ export async function generateSite({
   }
   resetIdle() // also covers a connect that never delivers bytes
 
-  logInfo('request', `model=${model} · prompt ${prompt.length} chars · limit ${Math.round(timeoutMs / 1000)}s`)
+  logInfo('request', `${host} · model=${model} · prompt ${prompt.length} chars · limit ${Math.round(timeoutMs / 1000)}s`)
   try {
     let res
     try {
-      res = await fetch(ENDPOINT, {
+      res = await fetch(chatEndpoint(baseUrl), {
         method: 'POST',
         signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-          'HTTP-Referer': window.location.href,
-          'X-Title': 'bolt-pocket',
-        },
+        headers: buildHeaders(baseUrl, apiKey),
         body: JSON.stringify({
           model,
           stream: true,
@@ -183,8 +219,8 @@ export async function generateSite({
       // TypeError: Failed to fetch — DNS/TLS/CORS-preflight/offline; never reached the API
       logError('connect', `${e.name}: ${e.message} at ${elapsed()} — request never completed`)
       throw new GenerationError(
-        'Could not reach OpenRouter — the network request was blocked or failed.',
-        'On Android this is usually an ad-blocker or private DNS blocking openrouter.ai, a VPN, or a dropped connection. Try Settings → Test connection, switch network, or whitelist openrouter.ai.',
+        `Could not reach ${host} — the network request was blocked or failed.`,
+        `On Android this is usually an ad-blocker or private DNS blocking ${host}, a VPN, a dropped connection, or the provider not allowing browser (CORS) requests. Try Settings → Test connection, switch network, or whitelist ${host}.`,
         'connect',
       )
     }
@@ -264,22 +300,18 @@ export async function generateSite({
 }
 
 // Minimal-cost probe: 1-token completion validates connectivity, key, and model id.
-export async function testConnection({ apiKey, model }) {
+export async function testConnection({ apiKey, baseUrl, model }) {
   const startedAt = Date.now()
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 30_000)
   const latency = () => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`
-  logInfo('test', `testing connection · model=${model}`)
+  const host = endpointHost(baseUrl)
+  logInfo('test', `testing ${host} · model=${model}`)
   try {
-    const res = await fetch(ENDPOINT, {
+    const res = await fetch(chatEndpoint(baseUrl), {
       method: 'POST',
       signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-        'HTTP-Referer': window.location.href,
-        'X-Title': 'bolt-pocket',
-      },
+      headers: buildHeaders(baseUrl, apiKey),
       body: JSON.stringify({
         model,
         max_tokens: 1,
@@ -303,7 +335,7 @@ export async function testConnection({ apiKey, model }) {
     return {
       ok: false,
       message: `${e.name}: ${e.message}`,
-      hint: 'Network-level failure: openrouter.ai is unreachable. Check ad-blocker/private DNS/VPN, or try another network.',
+      hint: `Network-level failure: ${host} is unreachable. Check ad-blocker/private DNS/VPN, whether the provider allows browser (CORS) requests, or try another network.`,
       latency: latency(),
     }
   } finally {
