@@ -115,6 +115,7 @@ export default function App() {
         prompt: text,
         currentFiles: proj.files,
         signal: controller.signal,
+        extraParams: settings.extraParams,
         timeoutMs: (Number(settings.timeoutSecs) || 600) * 1000,
         onProgress: (chars) => {
           const now = Date.now()

@@ -30,6 +30,32 @@ export const MOONSHOT_MODEL_PRESETS = [
   { label: 'kimi-latest', value: 'kimi-latest' },
 ]
 
+// One-tap inserts for Settings → Extra request parameters.
+export const EXTRA_PARAM_TEMPLATES = [
+  { label: 'Pin provider', value: { provider: { only: ['moonshotai'], allow_fallbacks: false } } },
+  { label: 'Fastest provider', value: { provider: { sort: 'throughput' } } },
+  { label: 'Reasoning effort', value: { reasoning: { effort: 'high' } } },
+  { label: 'JSON mode', value: { response_format: { type: 'json_object' } } },
+  { label: 'Sampling', value: { temperature: 0.7, top_p: 0.9 } },
+]
+
+// Parse the free-form extras JSON. Throws GenerationError (phase 'settings')
+// so a broken config fails fast in the chat instead of mid-request.
+function parseExtras(raw) {
+  if (!raw || !raw.trim()) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+    throw new Error('top level must be a JSON object')
+  } catch (e) {
+    throw new GenerationError(
+      'Extra request parameters are not valid JSON.',
+      `Settings → Extra request parameters: ${e.message}`,
+      'settings',
+    )
+  }
+}
+
 // Any OpenAI-protocol-compatible base URL works; we append /chat/completions.
 export function chatEndpoint(baseUrl) {
   return `${(baseUrl || DEFAULT_BASE_URL).trim().replace(/\/+$/, '')}/chat/completions`
@@ -168,12 +194,14 @@ export async function generateSite({
   currentFiles,
   signal,
   onProgress,
+  extraParams,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   idleMs = IDLE_MS,
 }) {
   const startedAt = Date.now()
   const elapsed = () => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`
   const host = endpointHost(baseUrl)
+  const extras = parseExtras(extraParams)
 
   // own controller so limits can abort independently of the user's halt signal
   let abortReason = null // 'halt' | 'timeout' | 'idle'
@@ -197,7 +225,12 @@ export async function generateSite({
   }
   resetIdle() // also covers a connect that never delivers bytes
 
-  logInfo('request', `${host} · model=${model} · prompt ${prompt.length} chars · limit ${Math.round(timeoutMs / 1000)}s`)
+  const extraKeys = Object.keys(extras)
+  logInfo(
+    'request',
+    `${host} · model=${model} · prompt ${prompt.length} chars · limit ${Math.round(timeoutMs / 1000)}s` +
+      (extraKeys.length ? ` · extras: ${extraKeys.join(', ')}` : ''),
+  )
   try {
     let res
     try {
@@ -206,6 +239,8 @@ export async function generateSite({
         signal: controller.signal,
         headers: buildHeaders(baseUrl, apiKey),
         body: JSON.stringify({
+          // extras first so app-controlled keys can never be clobbered
+          ...extras,
           model,
           stream: true,
           messages: [
@@ -300,12 +335,18 @@ export async function generateSite({
 }
 
 // Minimal-cost probe: 1-token completion validates connectivity, key, and model id.
-export async function testConnection({ apiKey, baseUrl, model }) {
+export async function testConnection({ apiKey, baseUrl, model, extraParams }) {
   const startedAt = Date.now()
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 30_000)
   const latency = () => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`
   const host = endpointHost(baseUrl)
+  let extras
+  try {
+    extras = parseExtras(extraParams)
+  } catch (e) {
+    return { ok: false, message: e.message, hint: e.hint, latency: latency() }
+  }
   logInfo('test', `testing ${host} · model=${model}`)
   try {
     const res = await fetch(chatEndpoint(baseUrl), {
@@ -313,6 +354,7 @@ export async function testConnection({ apiKey, baseUrl, model }) {
       signal: controller.signal,
       headers: buildHeaders(baseUrl, apiKey),
       body: JSON.stringify({
+        ...extras,
         model,
         max_tokens: 1,
         messages: [{ role: 'user', content: 'ping' }],

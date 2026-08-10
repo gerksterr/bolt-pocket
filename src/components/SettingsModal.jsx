@@ -1,5 +1,11 @@
-import { useState } from 'react'
-import { BASE_URL_PRESETS, MODEL_PRESETS, MOONSHOT_MODEL_PRESETS, testConnection } from '../lib/ai'
+import { useMemo, useState } from 'react'
+import {
+  BASE_URL_PRESETS,
+  EXTRA_PARAM_TEMPLATES,
+  MODEL_PRESETS,
+  MOONSHOT_MODEL_PRESETS,
+  testConnection,
+} from '../lib/ai'
 import { IconClose, IconGear } from './icons.jsx'
 
 const KEY_LINKS = [
@@ -12,6 +18,30 @@ const KEY_LINKS = [
 function keyLinkFor(baseUrl) {
   const found = KEY_LINKS.find((k) => (baseUrl || '').includes(k.match))
   return found || { url: 'https://openrouter.ai/keys', label: 'your provider’s API keys page' }
+}
+
+// Template chips merge into existing extras instead of clobbering them.
+function deepMerge(target, source) {
+  const out = { ...target }
+  for (const [k, v] of Object.entries(source)) {
+    out[k] =
+      v && typeof v === 'object' && !Array.isArray(v) && target[k] && typeof target[k] === 'object' && !Array.isArray(target[k])
+        ? deepMerge(target[k], v)
+        : v
+  }
+  return out
+}
+
+function validateExtras(raw) {
+  if (!raw || !raw.trim()) return null
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? null
+      : 'Top level must be a JSON object'
+  } catch (e) {
+    return e.message
+  }
 }
 
 function Field({ label, hint, children }) {
@@ -46,6 +76,7 @@ export default function SettingsModal({ open, settings, onSave, onClose }) {
       apiKey: draft.apiKey.trim(),
       baseUrl: draft.baseUrl.trim(),
       model: draft.model.trim(),
+      extraParams: draft.extraParams,
     })
     setTestResult(result)
     setTesting(false)
@@ -54,6 +85,21 @@ export default function SettingsModal({ open, settings, onSave, onClose }) {
   const isMoonshot = (draft.baseUrl || '').includes('moonshot')
   const modelPresets = isMoonshot ? MOONSHOT_MODEL_PRESETS : MODEL_PRESETS
   const keyLink = keyLinkFor(draft.baseUrl)
+  const extrasError = useMemo(() => validateExtras(draft.extraParams), [draft.extraParams])
+
+  const insertTemplate = (tpl) => {
+    let current = {}
+    const raw = (draft.extraParams || '').trim()
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) current = parsed
+      } catch {
+        current = {} // broken JSON — template gives a clean starting point
+      }
+    }
+    setDraft((d) => ({ ...d, extraParams: JSON.stringify(deepMerge(current, tpl), null, 2) }))
+  }
 
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center sm:items-center">
@@ -163,6 +209,37 @@ export default function SettingsModal({ open, settings, onSave, onClose }) {
               </button>
             ))}
           </div>
+
+          <Field
+            label="Extra request parameters (JSON)"
+            hint="Merged into every request body — e.g. OpenRouter provider routing. model, messages and stream stay app-controlled."
+          >
+            <textarea
+              value={draft.extraParams}
+              onChange={set('extraParams')}
+              rows={4}
+              spellCheck={false}
+              placeholder={'{\n  "provider": { "only": ["moonshotai"], "allow_fallbacks": false }\n}'}
+              className={`${inputCls} resize-none font-mono text-xs leading-relaxed`}
+            />
+          </Field>
+          <div className="flex flex-wrap gap-2">
+            {EXTRA_PARAM_TEMPLATES.map((t) => (
+              <button
+                key={t.label}
+                type="button"
+                onClick={() => insertTemplate(t.value)}
+                className="rounded-full border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-400 hover:border-amber-500 hover:text-amber-300"
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          {(draft.extraParams || '').trim() && (
+            <p className={`text-xs ${extrasError ? 'text-red-400' : 'text-emerald-400'}`}>
+              {extrasError ? `✕ ${extrasError}` : '✓ Valid JSON — merged into every request'}
+            </p>
+          )}
 
           <div className="rounded-xl border border-zinc-800 p-3">
             <button

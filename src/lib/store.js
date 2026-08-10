@@ -35,6 +35,7 @@ export const DEFAULT_SETTINGS = {
   apiKey: '',
   baseUrl: 'https://openrouter.ai/api/v1',
   model: 'deepseek/deepseek-chat',
+  extraParams: '',
   ghPat: '',
   ghUser: '',
   timeoutSecs: 600,
