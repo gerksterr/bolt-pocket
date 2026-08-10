@@ -106,9 +106,9 @@ export default function App() {
     const controller = new AbortController()
     abortRef.current = controller
     setGenerating(true)
-    setProgress({ chars: 0, startedAt: Date.now() })
+    setProgress({ content: '', reasoning: '', startedAt: Date.now() })
     try {
-      const files = await generateSite({
+      const result = await generateSite({
         apiKey: settings.apiKey,
         baseUrl: settings.baseUrl,
         model: settings.model,
@@ -117,19 +117,33 @@ export default function App() {
         signal: controller.signal,
         extraParams: settings.extraParams,
         timeoutMs: (Number(settings.timeoutSecs) || 600) * 1000,
-        onProgress: (chars) => {
+        onProgress: ({ content, reasoning }) => {
           const now = Date.now()
           if (now - progressThrottleRef.current > 120) {
             progressThrottleRef.current = now
-            setProgress((p) => (p ? { ...p, chars } : p))
+            setProgress((p) => (p ? { ...p, content, reasoning } : p))
           }
         },
       })
+      const meta = [
+        settings.model,
+        `${(result.elapsedMs / 1000).toFixed(1)}s`,
+        result.usage?.total_tokens ? `${result.usage.total_tokens.toLocaleString()} tokens` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
       updateProject(proj.id, (p) => ({
-        files,
+        files: result.files,
         chat: [
           ...p.chat,
-          { role: 'assistant', text: 'Site updated — check the preview.', meta: settings.model, ts: Date.now() },
+          {
+            role: 'assistant',
+            text: 'Site updated — check the preview.',
+            meta,
+            // cap stored thinking so localStorage stays healthy
+            reasoning: result.reasoning ? result.reasoning.slice(0, 30_000) : '',
+            ts: Date.now(),
+          },
         ].slice(-CHAT_LIMIT),
       }))
       if (!isDesktop) setView('preview')

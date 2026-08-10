@@ -149,15 +149,19 @@ function buildUserMessage(prompt, currentFiles) {
   return `Current project files:\n\n${sections}\n\nRequest: ${prompt}\n\nRespond with the complete updated files as a single JSON object only.`
 }
 
-// Read an SSE stream, returning the accumulated content. onChunk(len, isFirst)
-// fires for every content delta; onActivity fires for every received chunk
+// Read an SSE stream, accumulating content, reasoning (thinking) and usage
+// separately. Callbacks receive the FULL accumulated strings so the UI can
+// render the live stream; onActivity fires for every received chunk
 // (including keep-alives) so callers can run a stall watchdog.
-async function readStream(body, onChunk, onActivity) {
+export async function readStream(body, { onContent, onReasoning, onActivity } = {}) {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  let text = ''
-  let first = true
+  let content = ''
+  let reasoning = ''
+  let usage = null
+  let firstContent = true
+  let firstReasoning = true
 
   for (;;) {
     const { done, value } = await reader.read()
@@ -171,19 +175,35 @@ async function readStream(body, onChunk, onActivity) {
       if (!line.startsWith('data:')) continue
       const payload = line.slice(5).trim()
       if (payload === '[DONE]') continue
+      let json
       try {
-        const delta = JSON.parse(payload)?.choices?.[0]?.delta?.content
-        if (delta) {
-          text += delta
-          onChunk(text.length, first)
-          first = false
-        }
+        json = JSON.parse(payload)
       } catch {
-        /* incomplete SSE payload — keep accumulating */
+        continue /* incomplete SSE payload — keep accumulating */
+      }
+      if (json.usage) usage = json.usage
+      const delta = json.choices?.[0]?.delta
+      if (!delta) continue
+      // OpenRouter normalizes to `reasoning`; DeepSeek/Moonshot use `reasoning_content`
+      const r =
+        typeof delta.reasoning === 'string'
+          ? delta.reasoning
+          : typeof delta.reasoning_content === 'string'
+            ? delta.reasoning_content
+            : ''
+      if (r) {
+        reasoning += r
+        onReasoning?.(reasoning, firstReasoning)
+        firstReasoning = false
+      }
+      if (delta.content) {
+        content += delta.content
+        onContent?.(content, firstContent)
+        firstContent = false
       }
     }
   }
-  return text
+  return { content, reasoning, usage }
 }
 
 export async function generateSite({
@@ -239,6 +259,10 @@ export async function generateSite({
         signal: controller.signal,
         headers: buildHeaders(baseUrl, apiKey),
         body: JSON.stringify({
+          // ask for thinking tokens unless the user's extras say otherwise
+          ...(extras.reasoning == null ? { reasoning: { enabled: true } } : {}),
+          // OpenRouter streams usage stats when asked
+          ...(host.includes('openrouter.ai') ? { usage: { include: true } } : {}),
           // extras first so app-controlled keys can never be clobbered
           ...extras,
           model,
@@ -269,20 +293,28 @@ export async function generateSite({
     logOk('connected', `HTTP 200 at ${elapsed()} · streaming response…`)
 
     let lastLogged = 0
-    const text = await readStream(
-      res.body,
-      (len, isFirst) => {
-        if (isFirst) logOk('stream', `first token at ${elapsed()}`)
-        if (len - lastLogged >= 2000) {
-          lastLogged = len
-          logInfo('stream', `${len.toLocaleString()} chars received at ${elapsed()}`)
+    let lastReasoningLogged = 0
+    const { content, reasoning, usage } = await readStream(res.body, {
+      onContent: (text, isFirst) => {
+        if (isFirst) logOk('stream', `first output token at ${elapsed()}`)
+        if (text.length - lastLogged >= 2000) {
+          lastLogged = text.length
+          logInfo('stream', `output ${text.length.toLocaleString()} chars at ${elapsed()}`)
         }
-        onProgress?.(len)
+        onProgress?.({ content, reasoning })
       },
-      resetIdle,
-    )
+      onReasoning: (text, isFirst) => {
+        if (isFirst) logOk('stream', `first thinking token at ${elapsed()}`)
+        if (text.length - lastReasoningLogged >= 4000) {
+          lastReasoningLogged = text.length
+          logInfo('stream', `thinking ${text.length.toLocaleString()} chars at ${elapsed()}`)
+        }
+        onProgress?.({ content, reasoning })
+      },
+      onActivity: resetIdle,
+    })
 
-    if (!text.trim()) {
+    if (!content.trim()) {
       logError('parse', `stream ended with no content at ${elapsed()}`)
       throw new GenerationError(
         'The model returned an empty response.',
@@ -290,13 +322,18 @@ export async function generateSite({
         'parse',
       )
     }
-    logInfo('parse', `stream complete · ${text.length.toLocaleString()} chars at ${elapsed()} · extracting JSON…`)
+    logInfo(
+      'parse',
+      `stream complete · output ${content.length.toLocaleString()}c` +
+        (reasoning ? ` + thinking ${reasoning.length.toLocaleString()}c` : '') +
+        ` at ${elapsed()} · extracting JSON…`,
+    )
 
     let files
     try {
-      files = toFiles(extractJson(text))
+      files = toFiles(extractJson(content))
     } catch (e) {
-      logError('parse', `${e.message} · response starts with: ${JSON.stringify(text.slice(0, 300))}`)
+      logError('parse', `${e.message} · response starts with: ${JSON.stringify(content.slice(0, 300))}`)
       throw new GenerationError(
         'The model did not return valid JSON.',
         'Retrying usually fixes it. The raw response is in the Log tab.',
@@ -307,8 +344,11 @@ export async function generateSite({
     const sizes = Object.entries(files)
       .map(([k, v]) => `${k} ${(v.length / 1024).toFixed(1)} KB`)
       .join(' · ')
-    logOk('done', `files updated in ${elapsed()} · ${sizes}`)
-    return files
+    const usageInfo = usage?.total_tokens
+      ? ` · ${usage.total_tokens.toLocaleString()} tokens (${(usage.prompt_tokens || 0).toLocaleString()} in / ${(usage.completion_tokens || 0).toLocaleString()} out)`
+      : ''
+    logOk('done', `files updated in ${elapsed()} · ${sizes}${usageInfo}`)
+    return { files, reasoning, usage, elapsedMs: Date.now() - startedAt }
   } catch (e) {
     if (e.name === 'AbortError' && abortReason === 'timeout') {
       logError('timeout', `hit the ${Math.round(timeoutMs / 1000)}s total limit at ${elapsed()}`)
